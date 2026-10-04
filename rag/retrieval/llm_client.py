@@ -102,38 +102,36 @@ async def _vertex_generate(
     response_schema: dict,
     max_output_tokens: int,
 ) -> LLMResult:
-    import vertexai
-    from vertexai.generative_models import GenerativeModel, GenerationConfig, Part, Content
+    from google.genai import types
 
     settings = get_settings()
-    vertexai.init(project=settings.vertex_ai_project, location=settings.vertex_ai_location)
-    model = GenerativeModel(settings.gemini_model)
-
-    config = GenerationConfig(
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
         response_mime_type="application/json",
-        response_schema=response_schema,
+        response_json_schema=response_schema,
         max_output_tokens=max_output_tokens,
         temperature=0.1,
         top_p=0.9,
     )
 
     contents = [
-        Content(role=m["role"], parts=[Part.from_text(p["text"]) for p in m["parts"]])
+        types.Content(role=m["role"], parts=[types.Part.from_text(text=p["text"]) for p in m["parts"]])
         for m in messages
     ]
 
     start = time.perf_counter()
-    response = await model.generate_content_async(
-        contents,
-        generation_config=config,
-        system_instruction=system_instruction,
+    response = await _genai_client().aio.models.generate_content(
+        model=settings.gemini_model,
+        contents=contents,
+        config=config,
     )
     latency_ms = (time.perf_counter() - start) * 1000
 
-    prompt_tokens = getattr(response.usage_metadata, "prompt_token_count", 0)
-    completion_tokens = getattr(response.usage_metadata, "candidates_token_count", 0)
+    usage = response.usage_metadata
+    prompt_tokens = (usage.prompt_token_count or 0) if usage else 0
+    completion_tokens = (usage.candidates_token_count or 0) if usage else 0
 
-    raw = response.text
+    raw = response.text or ""
     json_valid = True
     try:
         data = json.loads(raw)
@@ -154,13 +152,15 @@ async def _vertex_generate(
 
 
 async def embed_text(text: str) -> list[float]:
+    """Embed a student query (retrieval-side)."""
     settings = get_settings()
     if settings.llm_provider == "ollama":
         return await _ollama_embed(text)
-    return await _vertex_embed(text)
+    return await _vertex_embed(text, task_type="RETRIEVAL_QUERY")
 
 
 async def embed_batch(texts: list[str]) -> list[list[float]]:
+    """Embed textbook chunks (ingestion-side)."""
     settings = get_settings()
     if settings.llm_provider == "ollama":
         return [await _ollama_embed(t) for t in texts]
@@ -179,38 +179,56 @@ async def _ollama_embed(text: str) -> list[float]:
     return resp.json()["embedding"]
 
 
-async def _vertex_embed(text: str) -> list[float]:
-    import asyncio
-    import vertexai
-    from vertexai.language_models import TextEmbeddingModel
+_genai: Any = None
+
+
+def _genai_client() -> Any:
+    """Lazily-created Google Gen AI client bound to Vertex AI (uses ADC / the Cloud Run service account)."""
+    global _genai
+    if _genai is None:
+        from google import genai
+
+        settings = get_settings()
+        _genai = genai.Client(
+            vertexai=True,
+            project=settings.vertex_ai_project,
+            location=settings.vertex_ai_location,
+        )
+    return _genai
+
+
+# gemini-embedding-001 accepts one input per request on Vertex AI — fan out with bounded concurrency.
+_EMBED_CONCURRENCY = 8
+
+
+async def _vertex_embed(text: str, task_type: str) -> list[float]:
+    from google.genai import types
 
     settings = get_settings()
-    vertexai.init(project=settings.vertex_ai_project, location=settings.vertex_ai_location)
-    model = TextEmbeddingModel.from_pretrained(settings.vertex_embed_model)
-    loop = asyncio.get_event_loop()
-    embeddings = await loop.run_in_executor(
-        None,
-        lambda: model.get_embeddings([text], output_dimensionality=settings.embed_dim),
+    result = await _genai_client().aio.models.embed_content(
+        model=settings.vertex_embed_model,
+        contents=text,
+        config=types.EmbedContentConfig(
+            task_type=task_type,
+            output_dimensionality=settings.embed_dim,
+        ),
     )
-    return embeddings[0].values
+    values = result.embeddings[0].values
+    if len(values) != settings.embed_dim:
+        raise ValueError(
+            f"Embedding has {len(values)} dims, expected {settings.embed_dim} "
+            f"(model={settings.vertex_embed_model})"
+        )
+    return values
 
 
 async def _vertex_embed_batch(texts: list[str]) -> list[list[float]]:
     import asyncio
-    import vertexai
-    from vertexai.language_models import TextEmbeddingModel
 
-    settings = get_settings()
-    vertexai.init(project=settings.vertex_ai_project, location=settings.vertex_ai_location)
-    model = TextEmbeddingModel.from_pretrained(settings.vertex_embed_model)
-    loop = asyncio.get_event_loop()
+    sem = asyncio.Semaphore(_EMBED_CONCURRENCY)
 
-    results = []
-    for i in range(0, len(texts), 50):
-        batch = texts[i:i + 50]
-        embeddings = await loop.run_in_executor(
-            None,
-            lambda b=batch: model.get_embeddings(b, output_dimensionality=settings.embed_dim),
-        )
-        results.extend([e.values for e in embeddings])
-    return results
+    async def _one(t: str) -> list[float]:
+        async with sem:
+            return await _vertex_embed(t, task_type="RETRIEVAL_DOCUMENT")
+
+    return list(await asyncio.gather(*(_one(t) for t in texts)))

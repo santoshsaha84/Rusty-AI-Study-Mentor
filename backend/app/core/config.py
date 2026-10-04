@@ -26,11 +26,13 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen2.5:3b"
     ollama_embed_model: str = "snowflake-arctic-embed2"
 
-    # GCP / Vertex AI (production)
+    # GCP / Vertex AI (production) — via the google-genai SDK.
+    # Default is the cost path (global endpoint, prompts may be processed outside India).
+    # India-resident path: VERTEX_AI_LOCATION=asia-south1, GEMINI_MODEL=gemini-3.5-flash.
     vertex_ai_project: str = "demo-rusty"
-    vertex_ai_location: str = "us-central1"
-    gemini_model: str = "gemini-2.5-flash-lite"
-    vertex_embed_model: str = "text-multilingual-embedding-002"
+    vertex_ai_location: str = "global"
+    gemini_model: str = "gemini-3.1-flash-lite"
+    vertex_embed_model: str = "gemini-embedding-001"
 
     # Embedding dimension (must match the model used)
     embed_dim: int = 1024

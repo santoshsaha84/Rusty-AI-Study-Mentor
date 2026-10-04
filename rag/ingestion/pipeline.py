@@ -11,8 +11,15 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from rag.ingestion.pdf_extractor import extract_pages
 from rag.ingestion.chunker import chunk_pages
 from rag.ingestion.metadata_tagger import tag_chunk
-from rag.ingestion.embedder import embed_batch_ollama
+from rag.retrieval.llm_client import embed_batch
 from rag.ingestion.language_detect import detect_language
+
+
+def _embed_model_name() -> str:
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    return settings.ollama_embed_model if settings.llm_provider == "ollama" else settings.vertex_embed_model
 
 
 def _contextual_header(
@@ -38,8 +45,6 @@ async def ingest_pdf(
     class_num: int,
     subject: str,
     database_url: str,
-    ollama_base_url: str = "http://localhost:11434",
-    ollama_embed_model: str = "snowflake-arctic-embed2",
     batch_size: int = 10,
     source_pdf_name: str | None = None,
 ) -> int:
@@ -73,12 +78,12 @@ async def ingest_pdf(
         meta.text_content = f"{header}\n\n{meta.text_content}"
         tagged.append(meta)
 
-    print(f"[4/5] Embedding {len(tagged)} chunks with {ollama_embed_model} (multilingual)...")
+    print(f"[4/5] Embedding {len(tagged)} chunks with {_embed_model_name()} (multilingual)...")
     all_texts = [t.text_content for t in tagged]
     all_embeddings = []
     for i in range(0, len(all_texts), batch_size):
         batch = all_texts[i:i + batch_size]
-        embs = await embed_batch_ollama(batch, ollama_base_url, ollama_embed_model)
+        embs = await embed_batch(batch)
         all_embeddings.extend(embs)
         print(f"       Embedded {min(i + batch_size, len(all_texts))}/{len(all_texts)}")
 

@@ -10,7 +10,7 @@ alembic==1.13.1
 pgvector==0.3.2
 
 # Validation
-pydantic==2.7.1
+pydantic==2.12.5
 pydantic-settings==2.2.1
 
 # Auth
@@ -21,12 +21,12 @@ bcrypt==4.1.3
 slowapi==0.1.9
 
 # GCP / AI
-google-cloud-aiplatform==1.53.0
+google-genai==2.28.0
 google-cloud-firestore==2.16.0
 google-cloud-storage==2.17.0
 
 # HTTP
-httpx==0.27.0
+httpx==0.28.1
 
 # PDF extraction (rag/ingestion)
 PyMuPDF==1.24.5

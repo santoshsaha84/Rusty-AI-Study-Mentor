@@ -3,15 +3,15 @@ Post-ingestion chapter summary generation.
 Fetches all chunks for a chapter, sends to LLM, stores structured summary.
 Generates both EN and HI versions when the source language is English.
 """
-import json
 import uuid
 from datetime import datetime, timezone
 
-import httpx
 from sqlalchemy import select, text as sql_text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
 import structlog
+
+from rag.retrieval.llm_client import generate_structured
 
 log = structlog.get_logger("rag.summary")
 
@@ -37,6 +37,17 @@ _SUMMARY_PROMPT_HI = (
 MAX_CHUNKS_FOR_SUMMARY = 15
 MAX_CHARS_PER_CHUNK = 400
 
+_SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "key_topics": {"type": "array", "items": {"type": "string"}},
+        "important_formulas": {"type": "array", "items": {"type": "string"}},
+        "important_definitions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary", "key_topics", "important_formulas", "important_definitions"],
+}
+
 
 async def generate_chapter_summaries(
     database_url: str,
@@ -44,8 +55,6 @@ async def generate_chapter_summaries(
     class_num: int,
     subject: str,
     detected_lang: str,
-    ollama_base_url: str = "http://localhost:11434",
-    ollama_model: str = "qwen2.5:3b",
 ) -> int:
     engine = create_async_engine(database_url, echo=False)
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -97,7 +106,7 @@ async def generate_chapter_summaries(
 
                 # Generate EN summary
                 en_summary = await _generate_one(
-                    passage_text, _SUMMARY_PROMPT_EN, ollama_base_url, ollama_model
+                    passage_text, _SUMMARY_PROMPT_EN
                 )
                 if en_summary:
                     await _upsert_summary(
@@ -108,7 +117,7 @@ async def generate_chapter_summaries(
 
                 # Generate HI summary (for all subjects — Hindi-medium students need it)
                 hi_summary = await _generate_one(
-                    passage_text, _SUMMARY_PROMPT_HI, ollama_base_url, ollama_model
+                    passage_text, _SUMMARY_PROMPT_HI
                 )
                 if hi_summary:
                     await _upsert_summary(
@@ -128,33 +137,17 @@ async def generate_chapter_summaries(
 async def _generate_one(
     passage_text: str,
     system_prompt: str,
-    ollama_base_url: str,
-    ollama_model: str,
 ) -> dict | None:
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Textbook passages:\n\n{passage_text}"},
+        {"role": "user", "parts": [{"text": f"Textbook passages:\n\n{passage_text}"}]},
     ]
-
-    payload = {
-        "model": ollama_model,
-        "messages": messages,
-        "stream": False,
-        "format": "json",
-        "options": {"temperature": 0.1, "num_predict": 2048},
-    }
 
     for attempt in range(2):
         try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
-                resp = await client.post(f"{ollama_base_url}/api/chat", json=payload)
-                resp.raise_for_status()
-
-            body = resp.json()
-            raw = body["message"]["content"]
-            data = json.loads(raw)
-
-            data = _normalize_keys(data)
+            result = await generate_structured(
+                messages, system_prompt, _SUMMARY_SCHEMA, max_output_tokens=2048
+            )
+            data = _normalize_keys(result.data)
             if not data.get("summary"):
                 log.warning("summary_incomplete", keys=list(data.keys()), attempt=attempt)
                 continue

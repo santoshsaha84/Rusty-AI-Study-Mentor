@@ -56,10 +56,8 @@ async def _run_ingestion(
     chapter: str | None,
     database_url: str,
 ) -> None:
-    from app.core.config import get_settings
     from rag.ingestion.pipeline import ingest_pdf
 
-    settings = get_settings()
     try:
         from rag.ingestion.language_detect import detect_language
         from rag.ingestion.pdf_extractor import extract_pages
@@ -73,8 +71,6 @@ async def _run_ingestion(
             class_num=class_num,
             subject=subject,
             database_url=database_url,
-            ollama_base_url=settings.ollama_base_url,
-            ollama_embed_model=settings.ollama_embed_model,
             source_pdf_name=source_pdf,
         )
 
@@ -103,8 +99,6 @@ async def _run_ingestion(
                 class_num=class_num,
                 subject=subject,
                 detected_lang=detected_lang,
-                ollama_base_url=settings.ollama_base_url,
-                ollama_model=settings.ollama_model,
             )
             log.info("summaries_generated", source_pdf=source_pdf, count=summary_count)
         except Exception as summary_exc:
@@ -369,8 +363,6 @@ async def regenerate_summaries(
                 class_num=class_num,
                 subject=subject,
                 detected_lang=lang,
-                ollama_base_url=settings.ollama_base_url,
-                ollama_model=settings.ollama_model,
             )
             log.info("summaries_regenerated", source_pdf=source_pdf, count=count)
         except Exception as exc:

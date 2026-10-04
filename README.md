@@ -33,7 +33,7 @@ An AI-powered study mentor built for [KHEL Foundation](https://diksha.foundation
 | Backend | FastAPI, SQLAlchemy 2.0 (async), Pydantic v2 |
 | Database | PostgreSQL 16 + pgvector (vector similarity search) |
 | LLM (dev) | Ollama — qwen2.5:3b (chat) + snowflake-arctic-embed2 (embeddings) |
-| LLM (prod) | Google Vertex AI — Gemini 2.5 Flash Lite |
+| LLM (prod) | Google Vertex AI (google-genai SDK) — Gemini 3.1 Flash-Lite (chat) + gemini-embedding-001 @ 1024 dims (embeddings) |
 | Auth | Firebase Authentication (emulator for dev) |
 | Containerization | Docker Compose |
 
@@ -190,11 +190,10 @@ These only work in development mode (`APP_ENV=development`):
 │   ├── ingestion/            # PDF → chunks → embeddings pipeline
 │   │   ├── pdf_extractor.py  # PDF text extraction
 │   │   ├── chunker.py        # Text chunking with overlap
-│   │   ├── embedder.py       # Ollama/Vertex embedding
 │   │   ├── metadata_tagger.py # Math type detection
 │   │   └── summary_generator.py # Chapter summary generation
 │   └── retrieval/            # Query → answer pipeline
-│       ├── llm_client.py     # Ollama/Vertex AI abstraction
+│       ├── llm_client.py     # Ollama/Vertex AI abstraction (chat + embeddings)
 │       ├── pre_filter.py     # Metadata-based chunk filtering
 │       ├── rrf.py            # Reciprocal Rank Fusion (vector + BM25)
 │       └── prompt_builder.py # System prompts for study/test/quiz modes
@@ -220,7 +219,7 @@ These only work in development mode (`APP_ENV=development`):
 The retrieval pipeline works as follows:
 
 1. **Input scan** — Every student query is scanned against the safeguarding blocklist before processing
-2. **Embedding** — Query is embedded using snowflake-arctic-embed2 (dev) or Vertex text-embedding (prod)
+2. **Embedding** — Query is embedded using snowflake-arctic-embed2 (dev) or gemini-embedding-001 (prod)
 3. **Vector search** — Cosine similarity search in pgvector, pre-filtered by class + subject + language
 4. **BM25 search** — Full-text PostgreSQL search on the same chunk set
 5. **RRF fusion** — Reciprocal Rank Fusion merges vector and BM25 results
@@ -321,7 +320,7 @@ See `backend/.env.template` for all variables. Key ones:
 
 For production on Google Cloud Run:
 
-1. Set `LLM_PROVIDER=vertex` and configure Vertex AI project
+1. Set `LLM_PROVIDER=vertex` and configure `VERTEX_AI_PROJECT` / `VERTEX_AI_LOCATION` / `GEMINI_MODEL` / `VERTEX_EMBED_MODEL`. Ollama is not deployed to GCP. Embeddings differ between providers, so re-ingest every PDF in each cloud environment.
 2. Remove `FIREBASE_AUTH_EMULATOR_HOST` (use real Firebase)
 3. Use Cloud SQL for PostgreSQL with pgvector
 4. Store secrets in GCP Secret Manager

@@ -28,6 +28,9 @@ google-cloud-storage==2.17.0
 # HTTP
 httpx==0.27.0
 
+# PDF extraction (rag/ingestion)
+PyMuPDF==1.24.5
+
 # Security
 python-jose[cryptography]==3.3.0
 

@@ -17,13 +17,13 @@ def test_phrases_file_exists():
 
 
 def test_phrases_file_not_empty():
-    data = json.loads(PHRASES_PATH.read_text())
+    data = json.loads(PHRASES_PATH.read_text(encoding="utf-8"))
     assert len(data.get("tier1_phrases", [])) > 0, "Phrase list is empty"
 
 
 def test_tier1_scan_triggers_on_known_phrases():
     """All phrases in phrases_v1.json must trigger tier1_scan."""
-    data = json.loads(PHRASES_PATH.read_text())
+    data = json.loads(PHRASES_PATH.read_text(encoding="utf-8"))
     phrases = data["tier1_phrases"]
     failures = []
     for phrase in phrases:
@@ -58,7 +58,7 @@ def test_tier1_scan_clean_queries_pass():
 
 def test_test_cases_file():
     """Run all must_trigger / must_not_trigger cases from test_cases.json."""
-    data = json.loads(CASES_PATH.read_text())
+    data = json.loads(CASES_PATH.read_text(encoding="utf-8"))
     failures = []
     for case in data.get("cases", []):
         text = case["text"]

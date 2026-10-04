@@ -46,6 +46,8 @@ An AI-powered study mentor built for [KHEL Foundation](https://diksha.foundation
 
 ## Setup — Step by Step
 
+> **Quick start:** `scripts/setup.ps1` (Windows) or `scripts/setup.sh` (macOS/Linux) automates the steps below. See [doc/LOCAL_LAUNCH.md](doc/LOCAL_LAUNCH.md) for the full launch guide, login credentials and troubleshooting.
+
 ### 1. Clone the repo
 
 ```bash

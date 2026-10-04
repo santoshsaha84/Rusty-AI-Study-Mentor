@@ -29,6 +29,11 @@ def _load_phrases() -> None:
 
     phrases_path = os.environ.get("PHRASES_FILE_PATH", "./safeguarding/phrases_v1.json")
     path = Path(phrases_path)
+    if not path.exists() and not path.is_absolute():
+        # backend/safeguarding is a git symlink to the repo-root folder; on checkouts
+        # without symlink support (Windows) fall back to the repo root copy.
+        repo_root = Path(__file__).resolve().parents[3]
+        path = repo_root / path
     if not path.exists():
         raise RuntimeError(
             f"Safeguarding phrases file not found at {phrases_path}. "

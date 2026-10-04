@@ -1,4 +1,3 @@
-version: "3.9"
 
 services:
   postgres:
@@ -8,7 +7,7 @@ services:
       POSTGRES_USER: rusty
       POSTGRES_PASSWORD: localdev
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"   # set POSTGRES_PORT if 5432 is taken
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

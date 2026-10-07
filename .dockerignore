@@ -1,0 +1,18 @@
+# Allowlist: the API image needs only these paths (build context = repo root).
+*
+!backend/requirements.txt
+!backend/app/
+!backend/migrations/
+!backend/alembic.ini
+!rag/
+!safeguarding/
+
+# Never ship env files, credentials or caches even if they sit inside an allowed dir
+**/.env
+**/.env.*
+**/*credentials*.json
+**/service-account-*.json
+rag/data
+**/*.pdf
+**/__pycache__
+**/*.pyc

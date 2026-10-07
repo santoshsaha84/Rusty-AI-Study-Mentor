@@ -8,6 +8,7 @@ import time
 import httpx
 import structlog
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.core.database import get_session_factory
@@ -47,8 +48,9 @@ async def ready():
         except Exception as exc:
             checks["llm"] = f"error: {type(exc).__name__}"
     else:
-        checks["llm"] = "vertex_ai"
+        # Not probed per request: each probe would be a billed Gemini call.
+        checks["llm"] = f"gemini:{settings.gemini_model}"
 
-    all_ok = checks["database"] == "ok" and checks.get("llm") != "error"
-    status_code = 200 if all_ok else 503
-    return {"status": "ready" if all_ok else "degraded", "checks": checks}
+    all_ok = checks["database"] == "ok" and not checks["llm"].startswith("error")
+    body = {"status": "ready" if all_ok else "degraded", "checks": checks}
+    return body if all_ok else JSONResponse(status_code=503, content=body)

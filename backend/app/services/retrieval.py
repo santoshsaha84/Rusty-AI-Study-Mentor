@@ -18,6 +18,7 @@ from app.schemas.quiz import QuizGenerateResponse, MCQOut, ShortAnswerOut
 from app.services.rag_trace import RAGTrace, Timer
 from app.services.circuit_breaker import llm_breaker, CircuitOpenError
 from app.services.token_budget import trim_history
+from app.middleware.safeguarding import tier1_scan
 from rag.retrieval.pre_filter import build_filter
 from rag.retrieval.rrf import reciprocal_rank_fusion
 from rag.retrieval.prompt_builder import build_prompt, PROMPT_VERSION
@@ -50,14 +51,21 @@ _TEST_SCHEMA = {
                     "option_b": {"type": "string"},
                     "option_c": {"type": "string"},
                     "option_d": {"type": "string"},
-                    "correct_option": {"type": "string"},
+                    "correct_option": {"type": "string", "enum": ["A", "B", "C", "D"]},
                     "explanation": {"type": "string"},
                     "math_type": {"type": "string"},
                     "has_math": {"type": "boolean"},
                 },
+                # Without "required", schema-constrained generation (Ollama) may omit
+                # option fields, and every question then fails the duplicate-option check.
+                "required": [
+                    "question_no", "question_text", "option_a", "option_b", "option_c",
+                    "option_d", "correct_option", "explanation", "math_type", "has_math",
+                ],
             },
         }
     },
+    "required": ["questions"],
 }
 
 _QUIZ_SCHEMA = {
@@ -74,9 +82,13 @@ _QUIZ_SCHEMA = {
                     "option_b": {"type": "string"},
                     "option_c": {"type": "string"},
                     "option_d": {"type": "string"},
-                    "answer": {"type": "string"},
+                    "answer": {"type": "string", "enum": ["A", "B", "C", "D"]},
                     "explanation": {"type": "string"},
                 },
+                "required": [
+                    "question_no", "question", "option_a", "option_b", "option_c",
+                    "option_d", "answer", "explanation",
+                ],
             },
         },
         "short_answers": {
@@ -88,9 +100,11 @@ _QUIZ_SCHEMA = {
                     "question": {"type": "string"},
                     "answer": {"type": "string"},
                 },
+                "required": ["question_no", "question", "answer"],
             },
         },
     },
+    "required": ["mcqs", "short_answers"],
 }
 
 
@@ -186,6 +200,10 @@ class RetrievalService:
                         trace.cache_hit = True
                         trace.total_ms = embed_t.ms
                         yield _sse("stage", {"stage": "cache_hit"})
+                        if study_output_blocked(cached.response_json):
+                            trace.error = "OutputBlocked"
+                            yield _sse("error", {"message": OUTPUT_BLOCKED_MESSAGE})
+                            return
                         yield _sse("result", cached.response_json)
                         yield _sse("done", {})
                         return
@@ -259,6 +277,12 @@ class RetrievalService:
 
             parsed = self._parse_response("study", llm_result.data, top_chunks, trace)
             result_dict = parsed.model_dump()
+
+            # Tier 1 safeguarding scan on OUTPUT before anything reaches the student or the cache
+            if study_output_blocked(result_dict):
+                trace.error = "OutputBlocked"
+                yield _sse("error", {"message": OUTPUT_BLOCKED_MESSAGE})
+                return
 
             # Store in cache
             if self._db and not trace.empty_response:
@@ -428,6 +452,11 @@ class RetrievalService:
             trace.ground_check_kept = len(kept_kp) + len(kept_misc)
             trace.ground_check_dropped = (len(key_points) + len(misconceptions)) - trace.ground_check_kept
             trace.empty_response = not notes and not kept_kp
+            if trace.empty_response:
+                # Model found nothing relevant in the passages — tell the student
+                # instead of rendering a blank answer.
+                notes = self._empty_response("study", trace.medium).notes
+                kept_misc = []
 
             return StudyResponseDTO(
                 key_points=kept_kp,
@@ -583,6 +612,19 @@ def _build_plain_text(mcqs: list[MCQOut], short: list[ShortAnswerOut]) -> str:
         lines.append(f"Q{s.question_no}. {s.question}")
         lines.append(f"   Answer: {s.answer}\n")
     return "\n".join(lines)
+
+
+OUTPUT_BLOCKED_MESSAGE = "Response could not be delivered. Please try a different question."
+
+
+def study_output_blocked(result: dict) -> bool:
+    """Tier 1 scan over every model-written field a study answer shows the student."""
+    text = " ".join([
+        *(result.get("key_points") or []),
+        result.get("notes") or "",
+        *(result.get("misconceptions") or []),
+    ])
+    return tier1_scan(text)
 
 
 def _sse(event: str, data: dict) -> str:

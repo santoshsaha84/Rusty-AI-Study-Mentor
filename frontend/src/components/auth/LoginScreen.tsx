@@ -2,6 +2,7 @@ import { useState, useId } from "react";
 import { useAuth } from "../../stores/AuthContext";
 import { authApi } from "../../api";
 import { ApiError } from "../../api/client";
+import { exchangeLoginToken } from "../../api/firebase";
 import type { AuthUser } from "../../types";
 
 const STUDENT_ID_RE = /^KHEL-\d{4}-[A-Z0-9]{2,6}$/;
@@ -36,7 +37,7 @@ export function LoginScreen() {
         role: res.role as AuthUser["role"],
         classNum: res.class_num,
         centreId: res.centre_id,
-        firebaseToken: res.firebase_token,
+        firebaseToken: await exchangeLoginToken(res.firebase_token),
       };
       setUser(user);
     } catch (err) {

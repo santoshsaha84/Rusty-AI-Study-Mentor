@@ -56,17 +56,22 @@ async def _ollama_generate(
         "model": settings.ollama_model,
         "messages": ollama_messages,
         "stream": False,
-        "format": "json",
+        # Structured output: constrains generation to the response schema so the
+        # model can't return bare/empty JSON objects.
+        "format": response_schema,
         "options": {
             "temperature": 0.1,
             "top_p": 0.9,
             "repeat_penalty": 1.1,
             "num_predict": max_output_tokens,
+            # Ollama defaults to a 4096-token window, which RAG prompts (~3.5k tokens)
+            # plus the answer overflow — the prompt gets truncated and output is cut short.
+            "num_ctx": settings.ollama_num_ctx,
         },
     }
 
     start = time.perf_counter()
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=settings.ollama_timeout_s) as client:
         resp = await client.post(f"{settings.ollama_base_url}/api/chat", json=payload)
         resp.raise_for_status()
     latency_ms = (time.perf_counter() - start) * 1000
@@ -173,7 +178,9 @@ async def _ollama_embed(text: str) -> list[float]:
         "model": settings.ollama_embed_model,
         "prompt": text,
     }
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    # Ollama serves one request at a time, so an embedding can queue behind a
+    # multi-minute test generation — use the same generous timeout as chat.
+    async with httpx.AsyncClient(timeout=settings.ollama_timeout_s) as client:
         resp = await client.post(f"{settings.ollama_base_url}/api/embeddings", json=payload)
         resp.raise_for_status()
     return resp.json()["embedding"]
@@ -183,17 +190,29 @@ _genai: Any = None
 
 
 def _genai_client() -> Any:
-    """Lazily-created Google Gen AI client bound to Vertex AI (uses ADC / the Cloud Run service account)."""
+    """Lazily-created Google Gen AI client.
+
+    GEMINI_AUTH=adc     -> Vertex AI / Gemini Enterprise endpoint with Application Default
+                           Credentials (the Cloud Run service account; no key to manage).
+    GEMINI_AUTH=api_key -> Gemini API with GEMINI_API_KEY (from Secret Manager).
+    Configured explicitly from Settings so the SDK never picks up stray GOOGLE_* env vars.
+    """
     global _genai
     if _genai is None:
         from google import genai
 
         settings = get_settings()
-        _genai = genai.Client(
-            vertexai=True,
-            project=settings.vertex_ai_project,
-            location=settings.vertex_ai_location,
-        )
+        if settings.gemini_auth == "api_key":
+            _genai = genai.Client(
+                enterprise=False,
+                api_key=settings.gemini_api_key.get_secret_value(),
+            )
+        else:
+            _genai = genai.Client(
+                enterprise=True,
+                project=settings.vertex_ai_project,
+                location=settings.vertex_ai_location,
+            )
     return _genai
 
 

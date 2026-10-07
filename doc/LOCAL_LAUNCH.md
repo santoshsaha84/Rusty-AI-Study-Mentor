@@ -173,6 +173,8 @@ curl -X POST http://localhost:8000/admin/upload-pdf \
   -F "subject=mathematics"
 ```
 
+> **The sample is one chapter only:** `maths-08.pdf` is Chapter 5, *Squares and Square Roots* (20 pages). Ask about squares, square roots, perfect squares, Pythagorean triplets and so on. Questions on other topics (for example, rational numbers) correctly get "I couldn't find that in your textbook".
+
 Ingestion runs in the background (several minutes for a full book on a laptop CPU). Check progress:
 
 ```bash
@@ -248,7 +250,23 @@ You are on Python 3.13. Delete `backend/venv` and recreate it with Python 3.11 o
 Run the backend from inside `backend/`. The app looks for `./safeguarding/phrases_v1.json` and falls back to the repo-root `safeguarding/` folder. If you override `PHRASES_FILE_PATH`, it must be an environment variable (not just a `backend/.env` entry) pointing to an existing file.
 
 ### Study answers are empty or "not in your textbook"
-No textbook is loaded for that class + subject, or ingestion has not finished. See section 7. Answers are restricted to the student's class and subject by design.
+- No textbook is loaded for that class + subject, or ingestion has not finished. See section 7. Answers are restricted to the student's class and subject by design.
+- The question isn't covered by the uploaded book; the sample book is one chapter only (see section 7).
+- Answers take **20–60 seconds** on a laptop with `qwen2.5:3b`. Wait for the "generating" stage to finish before assuming it's broken.
+
+### Practice test shows "Could not generate test"
+- **Be patient, and start a test only once.** Writing 5 questions is ~850 tokens of output. On a laptop with a small GPU (for example a 2 GB MX570, where only half of `qwen2.5:3b` fits in GPU memory) that takes **3–5 minutes**. Ollama handles one request at a time, so tapping Test again, or asking study questions meanwhile, puts each new request in a queue behind the running one.
+- **Sometimes every generated question fails the quality checks** (only one correct option, four different options, no "not/except" wording). The API then returns 404 and the screen shows this message even though the textbook is loaded. The backend log shows `MCQ dropped: …` lines for each rejected question. Just try again; a larger model (next entry) fails far less often.
+- If the log shows `ReadTimeout`, raise `OLLAMA_TIMEOUT_S` in `backend/.env` (default `600`) and restart the backend.
+
+### Answers are slow, shallow or have wrong arithmetic
+`qwen2.5:3b` is a small model, chosen so it runs on modest hardware. It sometimes gets calculations wrong (for example, it once gave √144 = 6) and often fills the answer fields sparsely. For better local answers, pull a larger model and set it in `backend/.env`, then restart the backend:
+```bash
+ollama pull qwen2.5:7b
+# backend/.env
+OLLAMA_MODEL=qwen2.5:7b
+```
+The embedding model doesn't change, so no re-ingestion is needed. Two related settings in `backend/.env`: `OLLAMA_NUM_CTX` (context window, default `8192`; Ollama's own default of 4096 is too small for the ~3.5k-token RAG prompts and truncates them) and `OLLAMA_TIMEOUT_S` (default `600`).
 
 ### Textbook stuck in `processing` (can't delete it)
 If the backend was restarted or crashed mid-ingestion, the record can stay in `processing`, and the delete endpoint refuses to remove it. Check the backend terminal for the error, then mark it failed and delete it:

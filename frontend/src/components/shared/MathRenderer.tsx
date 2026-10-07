@@ -10,18 +10,11 @@ let katexPromise: Promise<typeof import("katex")> | null = null;
 
 function loadKatex() {
   if (!katexPromise) {
-    katexPromise = import("katex").then((mod) => {
-      // Also inject the KaTeX CSS once
-      if (!document.getElementById("katex-css")) {
-        const link = document.createElement("link");
-        link.id = "katex-css";
-        link.rel = "stylesheet";
-        link.href = "https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css";
-        link.crossOrigin = "anonymous";
-        document.head.appendChild(link);
-      }
-      return mod;
-    });
+    // CSS + fonts are bundled from the katex package (no CDN — the CSP allows only 'self')
+    katexPromise = Promise.all([
+      import("katex"),
+      import("katex/dist/katex.min.css"),
+    ]).then(([mod]) => mod);
   }
   return katexPromise;
 }

@@ -7,7 +7,7 @@ from app.middleware.safeguarding import tier1_scan, SAFE_REDIRECT_MESSAGE
 from app.schemas.study import StudyQueryRequest, StudyResponseDTO
 from app.repositories.chunk_repo import ChunkRepository
 from app.repositories.summary_repo import SummaryRepository
-from app.services.retrieval import RetrievalService
+from app.services.retrieval import RetrievalService, study_output_blocked, OUTPUT_BLOCKED_MESSAGE
 from app.services.circuit_breaker import CircuitOpenError
 
 router = APIRouter()
@@ -66,6 +66,9 @@ async def chapter_summary(
                 status_code=404,
                 detail="Summary not available for this chapter yet.",
             )
+
+    if study_output_blocked(_summary_to_study_response(summary).model_dump()):
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=OUTPUT_BLOCKED_MESSAGE)
 
     return {
         "class_num": summary.class_num,
@@ -133,7 +136,11 @@ async def study_query(
                 user.class_num or 5, body.subject.lower().strip(), body.chapter, "en"
             )
         if summary:
-            return _summary_to_study_response(summary)
+            result = _summary_to_study_response(summary)
+            # Summaries are LLM-written at ingestion time — scanned like any other output
+            if study_output_blocked(result.model_dump()):
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=OUTPUT_BLOCKED_MESSAGE)
+            return result
 
     chunk_repo = ChunkRepository(db)
     service = RetrievalService(chunk_repo, db_session=db)
@@ -153,11 +160,10 @@ async def study_query(
         raise HTTPException(status_code=503, detail=str(e))
 
     # Tier 1 safeguarding scan on OUTPUT — AI response is not trusted
-    output_text = " ".join(result.key_points) + " " + result.notes
-    if tier1_scan(output_text):
+    if study_output_blocked(result.model_dump()):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Response could not be delivered. Please try a different question.",
+            detail=OUTPUT_BLOCKED_MESSAGE,
         )
 
     return result
@@ -193,6 +199,8 @@ async def study_query_stream(
         if summary:
             import json
             result = _summary_to_study_response(summary)
+            if study_output_blocked(result.model_dump()):
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=OUTPUT_BLOCKED_MESSAGE)
             async def _summary_stream():
                 yield f"event: stage\ndata: {{\"stage\": \"cache_hit\"}}\n\n"
                 yield f"event: result\ndata: {json.dumps(result.model_dump(), ensure_ascii=False)}\n\n"

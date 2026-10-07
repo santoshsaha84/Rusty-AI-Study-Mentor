@@ -2,7 +2,6 @@ import hashlib
 import json as _json
 import uuid
 import tempfile
-import shutil
 from pathlib import Path
 
 import structlog
@@ -14,6 +13,7 @@ from app.models.textbook import Textbook
 from app.models.chunk import Chunk
 from app.models.chapter_summary import ChapterSummary
 from app.repositories.trace_repo import TraceRepository
+from app.services.ingestion import run_ingestion
 
 log = structlog.get_logger(__name__)
 
@@ -27,91 +27,17 @@ VALID_SUBJECTS = {"mathematics", "science", "hindi", "social_science", "english"
 MAX_PDF_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
-_TEXTBOOK_UPDATE_FIELDS = {"status", "chunk_count", "language", "error_message"}
-
-
-async def _update_textbook(database_url: str, source_pdf: str, **fields) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-    from sqlalchemy import text as sql_text
-    invalid = set(fields.keys()) - _TEXTBOOK_UPDATE_FIELDS
-    if invalid:
-        raise ValueError(f"Disallowed fields in textbook update: {invalid}")
-    sets = ", ".join(f"{k} = :{k}" for k in fields)
-    engine = create_async_engine(database_url)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as session:
-        await session.execute(
-            sql_text(f"UPDATE textbooks SET {sets} WHERE source_pdf = :source_pdf"),
-            {"source_pdf": source_pdf, **fields},
-        )
-        await session.commit()
-    await engine.dispose()
-
-
-async def _run_ingestion(
-    pdf_path: str,
-    source_pdf: str,
-    class_num: int,
-    subject: str,
-    chapter: str | None,
-    database_url: str,
-) -> None:
-    from rag.ingestion.pipeline import ingest_pdf
-
+async def _start_ingest_job_or_fail(db, textbook: Textbook) -> None:
+    """Start the rusty-ingest Cloud Run Job; mark the textbook failed if it can't be started."""
+    from app.services import gcp
     try:
-        from rag.ingestion.language_detect import detect_language
-        from rag.ingestion.pdf_extractor import extract_pages
-
-        pages = extract_pages(pdf_path)
-        sample_text = " ".join(p["text"][:200] for p in pages[:5])
-        detected_lang = detect_language(sample_text)
-
-        count = await ingest_pdf(
-            pdf_path=pdf_path,
-            class_num=class_num,
-            subject=subject,
-            database_url=database_url,
-            source_pdf_name=source_pdf,
-        )
-
-        if chapter:
-            from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-            from sqlalchemy import text as sql_text
-            engine = create_async_engine(database_url)
-            factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-            async with factory() as session:
-                await session.execute(
-                    sql_text("UPDATE chunks SET chapter = :chapter WHERE source_pdf = :source_pdf AND (chapter IS NULL OR chapter = '')"),
-                    {"chapter": chapter, "source_pdf": source_pdf},
-                )
-                await session.commit()
-            await engine.dispose()
-
-        await _update_textbook(database_url, source_pdf, status="ready", chunk_count=count, language=detected_lang)
-        log.info("ingestion_complete", source_pdf=source_pdf, chunk_count=count)
-
-        # Generate chapter summaries (EN + HI) after chunks are ready
-        try:
-            from rag.ingestion.summary_generator import generate_chapter_summaries
-            summary_count = await generate_chapter_summaries(
-                database_url=database_url,
-                source_pdf=source_pdf,
-                class_num=class_num,
-                subject=subject,
-                detected_lang=detected_lang,
-            )
-            log.info("summaries_generated", source_pdf=source_pdf, count=summary_count)
-        except Exception as summary_exc:
-            log.error("summary_generation_failed", source_pdf=source_pdf, error=str(summary_exc))
-
+        await gcp.start_ingest_job()
     except Exception as exc:
-        log.error("ingestion_failed", source_pdf=source_pdf, error=str(exc))
-        await _update_textbook(database_url, source_pdf, status="failed", error_message=str(exc)[:500])
-
-    finally:
-        pdf = Path(pdf_path)
-        if pdf.exists():
-            pdf.unlink()
+        log.error("ingest_job_start_failed", source_pdf=textbook.source_pdf, error=type(exc).__name__)
+        textbook.status = "failed"
+        textbook.error_message = "Could not start the ingestion job. Try again or ask the tech lead."
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=textbook.error_message)
 
 
 @router.post("/upload-pdf")
@@ -153,12 +79,18 @@ async def upload_pdf(
             detail=f"This file already exists. Delete it first to re-upload.",
         )
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    tmp.write(content)
-    tmp.close()
+    from app.core.config import get_settings
+    settings = get_settings()
+    textbook_id = uuid.uuid4()
+
+    if settings.uses_cloud_ingestion:
+        # Cloud Run throttles CPU once the response is sent, so a BackgroundTask would
+        # stall — store the PDF in Cloud Storage and hand off to the rusty-ingest job.
+        from app.services import gcp
+        await gcp.upload_textbook_pdf(str(textbook_id), content)
 
     textbook = Textbook(
-        textbook_id=uuid.uuid4(),
+        textbook_id=textbook_id,
         source_pdf=source_pdf,
         original_filename=file.filename,
         class_num=class_num,
@@ -170,18 +102,23 @@ async def upload_pdf(
     db.add(textbook)
     await db.flush()
 
-    from app.core.config import get_settings
-    settings = get_settings()
-
-    background_tasks.add_task(
-        _run_ingestion,
-        pdf_path=tmp.name,
-        source_pdf=source_pdf,
-        class_num=class_num,
-        subject=subject_clean,
-        chapter=chapter_clean,
-        database_url=settings.database_url,
-    )
+    if settings.uses_cloud_ingestion:
+        # The job finds work by reading textbooks rows, so the row must be committed first.
+        await db.commit()
+        await _start_ingest_job_or_fail(db, textbook)
+    else:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        tmp.write(content)
+        tmp.close()
+        background_tasks.add_task(
+            run_ingestion,
+            pdf_path=tmp.name,
+            source_pdf=source_pdf,
+            class_num=class_num,
+            subject=subject_clean,
+            chapter=chapter_clean,
+            database_url=settings.database_url,
+        )
 
     log.info("ingestion_started", source_pdf=source_pdf, uploaded_by_hash=_hash_id(user.student_id))
 
@@ -353,6 +290,14 @@ async def regenerate_summaries(
 
     from app.core.config import get_settings
     settings = get_settings()
+
+    if settings.uses_cloud_ingestion:
+        # No long-running background work on Cloud Run: the ingest job re-processes the PDF
+        # from Cloud Storage (idempotent — chunks are replaced) and regenerates summaries.
+        textbook.status = "processing"
+        await db.commit()
+        await _start_ingest_job_or_fail(db, textbook)
+        return {"status": "regeneration_started", "source_pdf": textbook.source_pdf}
 
     async def _regen(source_pdf: str, class_num: int, subject: str, lang: str) -> None:
         try:

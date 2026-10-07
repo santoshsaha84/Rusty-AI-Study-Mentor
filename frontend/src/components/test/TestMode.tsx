@@ -47,53 +47,58 @@ export function TestMode({ subject, chapter, medium, onBack, onTryAgain, onStudy
     if (!user) return;
     const ac = new AbortController();
 
-    if (resumeTestId) {
-      testApi
-        .resume(resumeTestId, user.firebaseToken)
-        .then((res) => {
-          if (ac.signal.aborted) return;
-          setTestId(res.test_id);
-          setQuestions(res.questions.map((q) => ({
-            question_id: q.question_id,
-            question_no: q.question_no,
-            question_text: q.question_text,
-            options: q.options,
-            has_math: q.has_math,
-          })));
-          setCurrentIdx(res.current_index);
-          setScoreSoFar(res.score_so_far);
+    // Defer the request one tick: React StrictMode (dev) mounts, unmounts and
+    // remounts immediately, and aborting a fetch doesn't stop the backend — without
+    // this, every test start would make the LLM generate two tests.
+    const start = setTimeout(() => {
+      if (resumeTestId) {
+        testApi
+          .resume(resumeTestId, user.firebaseToken)
+          .then((res) => {
+            if (ac.signal.aborted) return;
+            setTestId(res.test_id);
+            setQuestions(res.questions.map((q) => ({
+              question_id: q.question_id,
+              question_no: q.question_no,
+              question_text: q.question_text,
+              options: q.options,
+              has_math: q.has_math,
+            })));
+            setCurrentIdx(res.current_index);
+            setScoreSoFar(res.score_so_far);
 
-          if (res.current_index >= res.questions.length) {
-            testApi.result(res.test_id, user.firebaseToken).then((r) => {
-              setResult(r);
-              setPhase("result");
-            }).catch(() => setPhase("error"));
-          } else {
+            if (res.current_index >= res.questions.length) {
+              testApi.result(res.test_id, user.firebaseToken).then((r) => {
+                setResult(r);
+                setPhase("result");
+              }).catch(() => setPhase("error"));
+            } else {
+              setPhase("question");
+            }
+          })
+          .catch((err) => {
+            if (ac.signal.aborted) return;
+            setErrorMsg("Could not load test. Please try again.");
+            setPhase("error");
+          });
+      } else {
+        testApi
+          .generate(subject, chapter, user.firebaseToken, medium, ac.signal)
+          .then((res) => {
+            if (ac.signal.aborted) return;
+            setTestId(res.test_id);
+            setQuestions(res.questions);
             setPhase("question");
-          }
-        })
-        .catch((err) => {
-          if (ac.signal.aborted) return;
-          setErrorMsg("Could not load test. Please try again.");
-          setPhase("error");
-        });
-    } else {
-      testApi
-        .generate(subject, chapter, user.firebaseToken, medium, ac.signal)
-        .then((res) => {
-          if (ac.signal.aborted) return;
-          setTestId(res.test_id);
-          setQuestions(res.questions);
-          setPhase("question");
-        })
-        .catch((err) => {
-          if (ac.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
-          setErrorMsg("Could not generate test. Please try again.");
-          setPhase("error");
-        });
-    }
+          })
+          .catch((err) => {
+            if (ac.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
+            setErrorMsg("Could not generate test. Please try again.");
+            setPhase("error");
+          });
+      }
+    }, 0);
 
-    return () => { ac.abort(); };
+    return () => { clearTimeout(start); ac.abort(); };
   }, []);
 
   async function handleAnswer(option: string) {

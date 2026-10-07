@@ -1,0 +1,13 @@
+# Builds and pushes the API image with Cloud Build (no local Docker needed).
+# Used by deploy/deploy.sh:
+#   gcloud builds submit --config cloudbuild.yaml --substitutions=_IMAGE=<registry>/api,_TAG=<git sha> .
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "backend/Dockerfile", "-t", "${_IMAGE}:${_TAG}", "."]
+images:
+  - "${_IMAGE}:${_TAG}"
+substitutions:
+  _IMAGE: asia-south1-docker.pkg.dev/your-gcp-project/rusty/api
+  _TAG: latest
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -50,8 +50,8 @@ def _configure_logging() -> None:
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             structlog.dev.ConsoleRenderer()
-            if not get_settings().is_production
-            else structlog.processors.JSONRenderer(),
+            if get_settings().is_development
+            else structlog.processors.JSONRenderer(),  # Cloud Logging parses JSON lines
         ],
         foreign_pre_chain=shared_processors,
     )
@@ -76,14 +76,16 @@ async def lifespan(app: FastAPI):
     log.info("startup", env=settings.app_env)
     init_firebase()
 
-    # Create rag_traces table if it doesn't exist, and purge expired rows
+    # Purge expired rows. Locally, also create any missing tables; staging/production schema
+    # comes only from Alembic (the rusty-migrate job) — create_all would race across instances.
     from app.core.database import get_engine, get_session_factory
-    from app.models.rag_trace import RAGTraceRow  # noqa: F401 — registers the model
-    from app.models.chapter_summary import ChapterSummary  # noqa: F401
-    from app.models.response_cache import ResponseCache  # noqa: F401
-    async with get_engine().begin() as conn:
-        from app.core.database import Base
-        await conn.run_sync(Base.metadata.create_all)
+    if settings.is_development:
+        from app.models.rag_trace import RAGTraceRow  # noqa: F401 — registers the model
+        from app.models.chapter_summary import ChapterSummary  # noqa: F401
+        from app.models.response_cache import ResponseCache  # noqa: F401
+        async with get_engine().begin() as conn:
+            from app.core.database import Base
+            await conn.run_sync(Base.metadata.create_all)
 
     async with get_session_factory()() as session:
         from app.repositories.trace_repo import TraceRepository

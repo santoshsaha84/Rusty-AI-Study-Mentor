@@ -1,9 +1,19 @@
 /// <reference types="vitest" />
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
-export default defineConfig({
+// Fills the CSP placeholder in index.html with the API origin (VITE_API_URL). Locally the API
+// is same-origin through the /api proxy, so nothing is added.
+function cspApiOrigin(apiUrl: string | undefined): Plugin {
+  const origin = apiUrl && /^https?:\/\//.test(apiUrl) ? new URL(apiUrl).origin : "";
+  return {
+    name: "rusty-csp-api-origin",
+    transformIndexHtml: (html) => html.replace("__API_ORIGIN__", origin),
+  };
+}
+
+export default defineConfig(({ mode }) => ({
   test: {
     globals: true,
     environment: "jsdom",
@@ -12,6 +22,8 @@ export default defineConfig({
   },
   plugins: [
     react(),
+    // loadEnv reads .env.[mode] files and shell variables (shell wins), like the app build does
+    cspApiOrigin(loadEnv(mode, process.cwd(), "VITE_").VITE_API_URL),
     VitePWA({
       registerType: "autoUpdate",
       workbox: {
@@ -23,15 +35,6 @@ export default defineConfig({
             options: {
               cacheName: "google-fonts",
               expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 365 },
-            },
-          },
-          {
-            urlPattern: /\/(study|test|admin)\//,
-            handler: "NetworkFirst",
-            options: {
-              cacheName: "api-cache",
-              networkTimeoutSeconds: 10,
-              expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 },
             },
           },
           {
@@ -66,4 +69,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

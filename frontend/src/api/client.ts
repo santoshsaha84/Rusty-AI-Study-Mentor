@@ -1,4 +1,6 @@
-const BASE_URL = import.meta.env.VITE_API_URL ?? "/api";
+import { getFreshIdToken } from "./firebase";
+
+const BASE_URL = import.meta.env.VITE_API_URL || "/api";
 
 class ApiError extends Error {
   constructor(
@@ -20,7 +22,7 @@ async function request<T>(
     "Content-Type": "application/json",
     ...(fetchOptions.headers as Record<string, string>),
   };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+  if (token) headers["Authorization"] = `Bearer ${await getFreshIdToken(token)}`;
 
   const res = await fetch(`${BASE_URL}${path}`, { ...fetchOptions, headers, signal });
 
@@ -69,7 +71,7 @@ export function streamSSE(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${await getFreshIdToken(token)}`,
         },
         body: JSON.stringify(body),
         signal,

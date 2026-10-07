@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from "react";
 import type { AuthUser } from "../types";
+import { firebaseSignOut } from "../api/firebase";
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -32,6 +33,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     userRef.current = null;
     setUserState(null);
+    firebaseSignOut().catch(() => { /* already signed out */ });
   }, []);
 
   return (

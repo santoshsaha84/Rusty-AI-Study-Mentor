@@ -185,7 +185,8 @@ These only work in development mode (`APP_ENV=development`):
 │   │   └── services/         # Business logic (retrieval, circuit breaker)
 │   ├── migrations/           # Alembic database migrations
 │   ├── tests/                # pytest test suite
-│   └── eval/                 # RAG evaluation framework
+│   ├── eval/                 # RAG evaluation framework
+│   └── .env.template         # Environment variable template (copy to backend/.env)
 ├── rag/
 │   ├── ingestion/            # PDF → chunks → embeddings pipeline
 │   │   ├── pdf_extractor.py  # PDF text extraction
@@ -210,8 +211,7 @@ These only work in development mode (`APP_ENV=development`):
 │       │   └── shared/       # MathRenderer, loaders, offline banner
 │       ├── api/              # API client + SSE streaming
 │       └── stores/           # Auth context, chapter state
-├── docker-compose.yml        # PostgreSQL + Firebase emulators
-└── .env.template             # Environment variable template
+└── docker-compose.yml        # PostgreSQL + Firebase emulators
 ```
 
 ## RAG Pipeline
